@@ -193,6 +193,7 @@ fn init(mut commands: Commands, mut state: ResMut<State<AppState>>) {
 struct RawHandles {
     sprites: Vec<Handle<Image>>,
     audio: Vec<Handle<AudioSource>>,
+    sprite_map: HashMap<String, Handle<Image>>,
 }
 
 #[derive(Default)]
@@ -236,7 +237,11 @@ fn load_all(
         let mut v = vec![];
         for name in atlas {
             let path = "sprites/".to_string() + name + ".png";
-            raw_handles.sprites.push(asset_server.load(&path));
+            let handle = asset_server.load(&path);
+            raw_handles.sprites.push(handle.clone());
+            raw_handles
+                .sprite_map
+                .insert(name.to_string(), handle.as_weak());
             v.push(name.to_string());
         }
         info.atlases.push(v);
@@ -285,7 +290,9 @@ fn setup(
     mut refresh_event: EventWriter<RefreshShelfEvent>,
     info: Res<Info>,
     audio_handles: Res<AudioHandles>,
+    raw_handles: Res<RawHandles>,
     audio: Res<Audio>,
+    assets: Res<Assets<TextureAtlas>>,
 ) {
     let res = Vec2::new(1200.0, 700.0);
     let halfres = res / 2.0;
@@ -409,9 +416,14 @@ fn setup(
     }
 
     let atlas_handle = atlas_handles.handles.get("pan").unwrap();
+    let atlas = assets.get(atlas_handle).unwrap();
     commands
         .spawn_bundle(SpriteSheetBundle {
-            sprite: TextureAtlasSprite::new(0),
+            sprite: TextureAtlasSprite::new(
+                atlas
+                    .get_texture_index(raw_handles.sprite_map.get("pan").unwrap())
+                    .unwrap(),
+            ),
             texture_atlas: atlas_handle.clone(),
             transform: Transform {
                 translation: Vec3::new(0.0, -halfres.y + 128.0, 2.0),
@@ -1025,6 +1037,9 @@ fn pan_anim(
     audio_handles: Res<AudioHandles>,
     audio: Res<Audio>,
     mut dude_query: Query<(Entity, &mut Dude)>,
+    mut atlas_handles: ResMut<AtlasHandles>,
+    assets: Res<Assets<TextureAtlas>>,
+    raw_handles: Res<RawHandles>,
 ) {
     let (_, mut dude) = dude_query.single_mut();
     let (mut pan, mut tr, mut sprite) = pan_query.single_mut();
@@ -1047,12 +1062,21 @@ fn pan_anim(
         }
         let e = f32::min(1.0, t.powi(5) * 32.0);
         tr.translation = pan.from * (1.0 - e) + pan.goto * e;
+        let atlas = assets
+            .get(atlas_handles.handles.get("pan").unwrap())
+            .unwrap();
         if t < 0.25 {
-            sprite.index = 0
+            sprite.index = atlas
+                .get_texture_index(raw_handles.sprite_map.get("pan").unwrap())
+                .unwrap();
         } else if t < 0.5 {
-            sprite.index = 1
+            sprite.index = atlas
+                .get_texture_index(raw_handles.sprite_map.get("pan-anim1").unwrap())
+                .unwrap();
         } else {
-            sprite.index = 2
+            sprite.index = atlas
+                .get_texture_index(raw_handles.sprite_map.get("pan-anim2").unwrap())
+                .unwrap();
         }
         for mut obj in &mut obj_query {
             if obj.zone == ObjectiveZone::Pan {
