@@ -1,7 +1,6 @@
 use bevy::asset::LoadState;
 use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
-use core::f32::consts::PI;
 use rand::prelude::*;
 use std::collections::HashMap;
 use std::ops::Add;
@@ -21,25 +20,50 @@ fn main() {
         .add_state(AppState::Setup)
         .add_system_set(SystemSet::on_enter(AppState::Setup).with_system(load_textures))
         .add_system_set(SystemSet::on_update(AppState::Setup).with_system(check_textures))
-        .add_system_set(SystemSet::on_enter(AppState::Finished).with_system(setup))
+        .add_system_set(SystemSet::on_exit(AppState::Setup).with_system(setup))
+        .add_system_set(SystemSet::on_enter(AppState::Game).with_system(spawn_dude))
         .add_system_set(
-            SystemSet::on_update(AppState::Finished)
-                .with_system(use_hand)
+            SystemSet::on_update(AppState::Game)
                 .with_system(move_hand)
+                .with_system(use_hand)
                 .with_system(refresh_shelf)
                 .with_system(restock_shelf)
                 .with_system(eat_anim)
-                .with_system(refresh_objectives),
+                .with_system(cooking)
+                .with_system(spawn_objectives)
+                .with_system(move_objs)
+                .with_system(match_timers)
+                .with_system(update_ui)
+                .with_system(update_ui_timer),
         )
+        .add_system_set(
+            SystemSet::on_exit(AppState::Game)
+                .with_system(clear_hand)
+                .with_system(ready_anim_objs),
+        )
+        .add_system_set(
+            SystemSet::on_update(AppState::Reward)
+                .with_system(pan_anim)
+                .with_system(eat_anim)
+                .with_system(move_objs)
+                .with_system(match_timers)
+                .with_system(update_ui)
+                .with_system(update_ui_timer)
+                .with_system(tally),
+        )
+        .add_system_set(SystemSet::on_exit(AppState::Reward).with_system(pan_reset))
         .add_system_to_stage(CoreStage::PreUpdate, mouse_pos)
         .init_resource::<AssetHandles>()
         .init_resource::<AtlasHandles>()
         .init_resource::<Hand>()
         .init_resource::<MousePos>()
         .init_resource::<Score>()
+        .init_resource::<MatchTimers>()
+        .insert_resource(Difficulty { threshold: 30 })
         .add_event::<RefreshShelfEvent>()
         .add_event::<RestockShelfEvent>()
-        .add_event::<EatEvent>();
+        .add_event::<EatEvent>()
+        .add_event::<PanSmashEvent>();
 
     #[cfg(target_arch = "wasm32")]
     {
@@ -52,7 +76,8 @@ fn main() {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum AppState {
     Setup,
-    Finished,
+    Game,
+    Reward,
 }
 
 #[derive(Default)]
@@ -77,7 +102,7 @@ fn check_textures(
     if let LoadState::Loaded =
         asset_server.get_group_load_state(sprite_handles.handles.iter().map(|handle| handle.id))
     {
-        state.set(AppState::Finished).unwrap();
+        state.set(AppState::Game).unwrap();
     }
 }
 
@@ -109,6 +134,9 @@ fn setup(
                 flavor: Flavor(HashMap::from([(Taste::Bitter, 1.0)])),
             },
         ],
+        dude: vec![DudeInfo {
+            sprite: "dude".to_string(),
+        }],
     };
     commands.insert_resource(info.clone());
 
@@ -119,9 +147,12 @@ fn setup(
     commands.spawn_bundle(camera_bundle);
 
     let mut atlases = vec![
-        vec!["dude", "dude-gnam"],
-        vec!["obj0", "obj1", "obj2", "obj3", "obj4", "obj5"],
-        vec!["pan"],
+        vec!["dude", "dude-gnam", "dude-puke"],
+        vec!["pan", "pan-anim1", "pan-anim2"],
+        vec!["Time"],
+        vec!["guuut"],
+        vec!["bad"],
+        vec!["resist"],
     ];
     for food_info in info.food.iter() {
         atlases.push(vec![&food_info.sprite]);
@@ -133,7 +164,9 @@ fn setup(
         let mut texture_atlas_builder = TextureAtlasBuilder::default();
         for name in atlas {
             let handle = asset_server.get_handle("sprites/".to_string() + name + ".png");
-            let texture = textures.get(&handle).expect("no texture");
+            let texture = textures
+                .get(&handle)
+                .expect(&("no texture ".to_string() + name));
             texture_atlas_builder.add_texture(handle, texture);
         }
         let texture_atlas = texture_atlas_builder.finish(&mut textures).unwrap();
@@ -144,6 +177,49 @@ fn setup(
     }
 
     commands
+        .spawn_bundle(SpriteSheetBundle {
+            sprite: TextureAtlasSprite::new(0),
+            texture_atlas: atlas_handles.handles.get("guuut").unwrap().clone(),
+            transform: Transform {
+                translation: Vec3::new(150.0, halfres.y - 256.0 + 64.0, 1.0),
+                scale: Vec3::splat(0.5),
+                ..default()
+            },
+            ..default()
+        })
+        .insert(DudePreferencePoint {
+            preference: Preference::Like,
+        });
+    commands
+        .spawn_bundle(SpriteSheetBundle {
+            sprite: TextureAtlasSprite::new(0),
+            texture_atlas: atlas_handles.handles.get("bad").unwrap().clone(),
+            transform: Transform {
+                translation: Vec3::new(150.0, halfres.y - 256.0, 1.0),
+                scale: Vec3::splat(0.5),
+                ..default()
+            },
+            ..default()
+        })
+        .insert(DudePreferencePoint {
+            preference: Preference::Dislike,
+        });
+    commands
+        .spawn_bundle(SpriteSheetBundle {
+            sprite: TextureAtlasSprite::new(0),
+            texture_atlas: atlas_handles.handles.get("resist").unwrap().clone(),
+            transform: Transform {
+                translation: Vec3::new(150.0, halfres.y - 256.0 - 64.0, 1.0),
+                scale: Vec3::splat(0.5),
+                ..default()
+            },
+            ..default()
+        })
+        .insert(DudePreferencePoint {
+            preference: Preference::Resist,
+        });
+
+    commands
         .spawn()
         .insert(Transform {
             translation: Vec3::new(0.0, halfres.y - 256.0, 1.0),
@@ -151,22 +227,6 @@ fn setup(
         })
         .insert(DudePoint);
 
-    let atlas_handle = atlas_handles.handles.get("dude").unwrap();
-    commands
-        .spawn_bundle(SpriteSheetBundle {
-            sprite: TextureAtlasSprite::new(0),
-            texture_atlas: atlas_handle.clone(),
-            transform: Transform {
-                translation: Vec3::new(0.0, halfres.y - 256.0, 1.0),
-                scale: Vec3::new(1.0, 1.0, 1.0),
-                ..default()
-            },
-            ..default()
-        })
-        .insert(Dude {
-            cycles: 0,
-            timer: Timer::new(Duration::from_millis(200), false),
-        });
     commands
         .spawn()
         .insert(Transform {
@@ -185,6 +245,26 @@ fn setup(
             .insert(Shelf);
     }
 
+    let atlas_handle = atlas_handles.handles.get("Time").unwrap();
+    for i in 0..10 {
+        commands
+            .spawn_bundle(SpriteSheetBundle {
+                sprite: TextureAtlasSprite::new(0),
+                texture_atlas: atlas_handle.clone(),
+                transform: Transform {
+                    translation: Vec3::new(
+                        500.0 / 2.0 - 500.0 / 20.0 - 500.0 * i as f32 / 10.0,
+                        halfres.y - 48.0,
+                        2.9 - i as f32 / 20.0,
+                    ),
+                    scale: Vec3::splat(0.5),
+                    ..default()
+                },
+                ..default()
+            })
+            .insert(UiTimer { num: i });
+    }
+
     let atlas_handle = atlas_handles.handles.get("pan").unwrap();
     commands
         .spawn_bundle(SpriteSheetBundle {
@@ -197,26 +277,200 @@ fn setup(
             },
             ..default()
         })
-        .insert(Pan {});
+        .insert(ObjectivePoint {
+            zone: ObjectiveZone::Pan,
+        })
+        .insert(Pan {
+            timer: Timer::new(Duration::from_millis(2000), false),
+            from: Vec3::new(0.0, -halfres.y + 128.0, 2.0),
+            goto: Vec3::new(0.0, halfres.y - 192.0, 2.0),
+            smashed: false,
+        });
 
-    for i in 0..8 {
-        commands
-            .spawn()
-            .insert(Transform {
-                translation: Vec3::new(
-                    halfres.x - 256.0,
-                    halfres.y - 550.0 + 500.0 * i as f32 / 8.0,
-                    2.0,
-                ),
-                scale: Vec3::new(1.0, 1.0, 1.0),
+    let font = asset_server.load("fonts/SztyletBd.ttf");
+    commands
+        .spawn_bundle(NodeBundle {
+            style: Style {
+                align_self: AlignSelf::FlexEnd,
+                position_type: PositionType::Absolute,
+                position: UiRect {
+                    right: Val::Px(192.0),
+                    top: Val::Px(192.0),
+                    ..default()
+                },
+                margin: UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(10.0), Val::Px(10.0)),
+                min_size: Size::new(Val::Px(100.0), Val::Px(70.0)),
                 ..default()
-            })
-            .insert(ObjectivePoint {
-                taste: Taste::from_u32(i),
-            });
-    }
+            },
+            color: Color::rgb(0.0, 0.0, 0.0).into(),
+            ..default()
+        })
+        .with_children(|parent| {
+            parent
+                .spawn_bundle(
+                    TextBundle::from_section(
+                        "0",
+                        TextStyle {
+                            font: font.clone(),
+                            font_size: 72.0,
+                            color: Color::WHITE,
+                        },
+                    )
+                    .with_text_alignment(TextAlignment::TOP_CENTER)
+                    .with_style(Style { ..default() }),
+                )
+                .insert(UiTag {
+                    name: UiName::Palate,
+                });
+        });
+    commands
+        .spawn_bundle(NodeBundle {
+            style: Style {
+                align_self: AlignSelf::FlexEnd,
+                position_type: PositionType::Absolute,
+                position: UiRect {
+                    right: Val::Px(192.0),
+                    top: Val::Px(halfres.y),
+                    ..default()
+                },
+                margin: UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(10.0), Val::Px(10.0)),
+                min_size: Size::new(Val::Px(100.0), Val::Px(70.0)),
+                ..default()
+            },
+            color: Color::rgb(0.0, 0.0, 0.0).into(),
+            ..default()
+        })
+        .with_children(|parent| {
+            parent
+                .spawn_bundle(
+                    TextBundle::from_section(
+                        "0",
+                        TextStyle {
+                            font: font.clone(),
+                            font_size: 72.0,
+                            color: Color::WHITE,
+                        },
+                    )
+                    .with_text_alignment(TextAlignment::TOP_CENTER)
+                    .with_style(Style { ..default() }),
+                )
+                .insert(UiTag {
+                    name: UiName::Stomach,
+                });
+        });
+    commands
+        .spawn_bundle(NodeBundle {
+            style: Style {
+                align_self: AlignSelf::FlexEnd,
+                position_type: PositionType::Absolute,
+                position: UiRect {
+                    right: Val::Px(192.0),
+                    bottom: Val::Px(128.0),
+                    ..default()
+                },
+                margin: UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(10.0), Val::Px(10.0)),
+                min_size: Size::new(Val::Px(100.0), Val::Px(70.0)),
+                ..default()
+            },
+            color: Color::rgb(0.0, 0.0, 0.0).into(),
+            ..default()
+        })
+        .with_children(|parent| {
+            parent
+                .spawn_bundle(
+                    TextBundle::from_section(
+                        "0",
+                        TextStyle {
+                            font: font.clone(),
+                            font_size: 72.0,
+                            color: Color::WHITE,
+                        },
+                    )
+                    .with_text_alignment(TextAlignment::TOP_CENTER)
+                    .with_style(Style { ..default() }),
+                )
+                .insert(UiTag { name: UiName::Pan });
+        });
 
     refresh_event.send(RefreshShelfEvent { clear: true });
+}
+
+fn spawn_dude(
+    mut commands: Commands,
+    atlas_handles: ResMut<AtlasHandles>,
+    info: Res<Info>,
+    dude_point: Query<(&DudePoint, &Transform)>,
+    pref_point: Query<(&DudePreferencePoint, &Transform)>,
+    dude_query: Query<(Entity, &Dude)>,
+    token_query: Query<(Entity, &PreferenceToken)>,
+) {
+    let mut rng = thread_rng();
+    for (ent, _) in &dude_query {
+        commands.entity(ent).despawn();
+    }
+    for (ent, _) in &token_query {
+        commands.entity(ent).despawn();
+    }
+    let (_, tr) = dude_point.single();
+
+    let palate = Flavor::gen();
+
+    let atlas_handle = atlas_handles.handles.get("dude").unwrap();
+    commands
+        .spawn_bundle(SpriteSheetBundle {
+            sprite: TextureAtlasSprite::new(0),
+            texture_atlas: atlas_handle.clone(),
+            transform: Transform {
+                translation: tr.translation,
+                scale: Vec3::new(1.0, 1.0, 1.0),
+                ..default()
+            },
+            ..default()
+        })
+        .insert(Dude {
+            puking: false,
+            cycles: 0,
+            timer: Timer::new(Duration::from_millis(rng.gen_range(20..100)), false),
+            palate: palate.clone(),
+        })
+        .insert(ObjectivePoint {
+            zone: ObjectiveZone::Stomach,
+        });
+
+    let mut places = Vec::<Preference>::new();
+    for i in 0..8 {
+        let taste = Taste::from_u32(i);
+        let atlas_handle = atlas_handles.handles.get(taste.as_str()).unwrap();
+
+        let pref: f32 = *palate.0.get(&taste).unwrap_or(&0.0);
+        let preference = Preference::from_f32(pref);
+
+        if let Some((_, tr)) = pref_point
+            .iter()
+            .find(|(pt, _)| pt.preference == preference)
+            .take()
+        {
+            let pos = tr.translation
+                + Vec3::new(
+                    places.iter().filter(|p| **p == preference).count() as f32 * 48.0 + 64.0,
+                    0.0,
+                    0.0,
+                );
+            commands
+                .spawn_bundle(SpriteSheetBundle {
+                    sprite: TextureAtlasSprite::new(0),
+                    texture_atlas: atlas_handle.clone(),
+                    transform: Transform {
+                        translation: pos,
+                        scale: Vec3::splat(0.5),
+                        ..default()
+                    },
+                    ..default()
+                })
+                .insert(PreferenceToken {});
+        }
+        places.push(preference.clone());
+    }
 }
 
 #[derive(Default)]
@@ -303,6 +557,27 @@ impl Add for Flavor {
     }
 }
 
+impl Flavor {
+    fn gen() -> Self {
+        let mut rng = thread_rng();
+        let mut ret = Self(HashMap::new());
+        for i in 0..8 {
+            let r = rng.gen_range(0..100);
+            let value = if r < 10 {
+                0.0
+            } else if r < 20 {
+                -1.0
+            } else if r < 40 {
+                2.0
+            } else {
+                1.0
+            };
+            ret.0.insert(Taste::from_u32(i), value);
+        }
+        ret
+    }
+}
+
 #[derive(Clone)]
 struct FoodInfo {
     sprite: String,
@@ -310,25 +585,42 @@ struct FoodInfo {
 }
 
 #[derive(Clone)]
+struct DudeInfo {
+    sprite: String,
+}
+
+#[derive(Clone)]
 struct Info {
     food: Vec<FoodInfo>,
+    dude: Vec<DudeInfo>,
 }
 
 #[derive(Component)]
 struct MouthPoint;
 
 #[derive(Component)]
-struct Pan {}
+struct Pan {
+    from: Vec3,
+    goto: Vec3,
+    timer: Timer,
+    smashed: bool,
+}
 
 #[derive(Component)]
 struct Dude {
     timer: Timer,
     cycles: u32,
+    palate: Flavor,
+    puking: bool,
 }
 
 #[derive(Component)]
 struct Objective {
     taste: Taste,
+    from: Vec3,
+    goto: Vec3,
+    zone: ObjectiveZone,
+    timer: Timer,
 }
 
 #[derive(PartialEq)]
@@ -339,12 +631,6 @@ enum FoodState {
     Cooking,
 }
 
-#[derive(Default)]
-struct Score {
-    successes: u32,
-    losses: u32,
-}
-
 struct RefreshShelfEvent {
     clear: bool,
 }
@@ -353,12 +639,24 @@ struct RestockShelfEvent {
     shelf: Entity,
 }
 
-#[derive(Component)]
-struct ObjectivePoint {
-    taste: Taste,
+#[derive(PartialEq, Clone)]
+enum ObjectiveZone {
+    Stomach,
+    Pan,
 }
 
-struct EatEvent {}
+#[derive(Component)]
+struct ObjectivePoint {
+    zone: ObjectiveZone,
+}
+
+struct EatEvent {
+    from: Vec3,
+    flavor: Flavor,
+    to_zone: ObjectiveZone,
+}
+
+struct PanSmashEvent {}
 
 #[derive(Component)]
 struct Food {
@@ -372,6 +670,272 @@ struct Hand {
     holding: Option<Entity>,
 }
 
+struct MatchTimers {
+    game: Timer,
+    reward: Timer,
+    cook: Timer,
+}
+impl Default for MatchTimers {
+    fn default() -> Self {
+        MatchTimers {
+            game: Timer::new(Duration::from_secs(10), true),
+            reward: Timer::new(Duration::from_secs(5), true),
+            cook: Timer::new(Duration::from_secs(1), true),
+        }
+    }
+}
+
+#[derive(Default)]
+struct Score {
+    successes: u32,
+    losses: u32,
+}
+
+struct Difficulty {
+    threshold: i32,
+}
+
+enum UiName {
+    Stomach,
+    Palate,
+    Pan,
+}
+
+#[derive(Component)]
+struct UiTag {
+    name: UiName,
+}
+
+#[derive(Component)]
+struct UiTimer {
+    num: u32,
+}
+
+fn match_timers(
+    mut theme_lol: ResMut<MatchTimers>,
+    time: Res<Time>,
+    mut state: ResMut<State<AppState>>,
+) {
+    if state.current() == &AppState::Game {
+        theme_lol.game.tick(time.delta());
+        if theme_lol.game.finished() {
+            state.set(AppState::Reward).unwrap();
+        }
+    } else if state.current() == &AppState::Reward {
+        theme_lol.reward.tick(time.delta());
+        if theme_lol.reward.finished() {
+            state.set(AppState::Game).unwrap();
+        }
+    }
+}
+
+fn tally(
+    mut commands: Commands,
+    obj_query: Query<(Entity, &Objective)>,
+    dude_query: Query<&Dude>,
+    mut score: ResMut<Score>,
+    mut difficulty: ResMut<Difficulty>,
+    mut smash_event: EventReader<PanSmashEvent>,
+) {
+    for _ in smash_event.iter() {
+        let dude = dude_query.single();
+
+        let mut sum: f32 = 0.0;
+        for (ent, obj) in &obj_query {
+            let modifier = dude.palate.0.get(&obj.taste).unwrap_or(&1.0);
+            let value = 1.0 * modifier;
+            sum += value;
+            commands.entity(ent).despawn();
+        }
+
+        if sum as i32 >= difficulty.threshold {
+            score.successes += 1;
+            difficulty.threshold += 10;
+        } else {
+            score.losses += 1;
+            difficulty.threshold -= 3;
+        }
+    }
+}
+
+fn update_ui(
+    mut text_query: Query<(&mut Text, &UiTag)>,
+    obj_query: Query<&Objective>,
+    difficulty: Res<Difficulty>,
+) {
+    let mut stomach_sum = 0;
+    let mut pan_sum = 0;
+    for obj in &obj_query {
+        if obj.zone == ObjectiveZone::Stomach {
+            stomach_sum += 1
+        } else {
+            pan_sum += 1
+        }
+    }
+    for (mut text, tag) in &mut text_query {
+        match tag.name {
+            UiName::Palate => text.sections[0].value = difficulty.threshold.to_string(),
+            UiName::Stomach => text.sections[0].value = stomach_sum.to_string(),
+            UiName::Pan => text.sections[0].value = pan_sum.to_string(),
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn update_ui_timer(
+    state: Res<State<AppState>>,
+    theme_lol: ResMut<MatchTimers>,
+    mut ui_timer_query: Query<(&UiTimer, &mut Visibility)>,
+) {
+    let perc = if state.current() == &AppState::Game {
+        theme_lol.game.percent()
+    } else {
+        theme_lol.reward.percent()
+    };
+    for (uitimer, mut vis) in &mut ui_timer_query {
+        if uitimer.num < (perc * 10.0) as u32 {
+            vis.is_visible = false;
+        } else {
+            vis.is_visible = true;
+        }
+    }
+}
+
+fn ready_anim_objs(mut obj_query: Query<&mut Objective>) {
+    for mut obj in &mut obj_query {
+        if obj.zone == ObjectiveZone::Pan {
+            obj.timer.reset();
+        }
+    }
+}
+
+fn pan_reset(mut pan_query: Query<&mut Pan>) {
+    let mut pan = pan_query.single_mut();
+    pan.smashed = false;
+}
+
+fn pan_anim(
+    mut obj_query: Query<&mut Objective>,
+    mut pan_query: Query<(&mut Pan, &mut Transform, &mut TextureAtlasSprite)>,
+    mut event_smash: EventWriter<PanSmashEvent>,
+    time: Res<Time>,
+) {
+    let (mut pan, mut tr, mut sprite) = pan_query.single_mut();
+    if pan.smashed {
+        return;
+    }
+    pan.timer.tick(time.delta());
+    if pan.timer.just_finished() {
+        event_smash.send(PanSmashEvent {});
+        pan.timer.reset();
+        tr.translation = pan.from;
+        sprite.index = 0;
+        pan.smashed = true;
+    } else {
+        let t = pan.timer.percent();
+        let e = f32::min(1.0, t.powi(5) * 32.0);
+        tr.translation = pan.from * (1.0 - e) + pan.goto * e;
+        if t < 0.25 {
+            sprite.index = 0
+        } else if t < 0.5 {
+            sprite.index = 2
+        } else {
+            sprite.index = 1
+        }
+        for mut obj in &mut obj_query {
+            if obj.zone == ObjectiveZone::Pan {
+                obj.goto = tr.translation + Vec3::new(0.0, 0.0, 1.0);
+            }
+        }
+    }
+}
+
+fn move_objs(mut obj_query: Query<(&mut Objective, &mut Transform)>, time: Res<Time>) {
+    for (mut obj, mut tr) in &mut obj_query {
+        if !obj.timer.finished() {
+            obj.timer.tick(time.delta());
+            let t = obj.timer.percent();
+            tr.translation = obj.goto * t + obj.from * (1.0 - t);
+        } else {
+            tr.translation = obj.goto;
+        }
+    }
+}
+
+fn cooking(
+    mut commands: Commands,
+    obj_points: Query<(&ObjectivePoint, &Transform)>,
+    mut obj_query: Query<(Entity, &mut Objective, &Transform)>,
+    mut match_timers: ResMut<MatchTimers>,
+    atlas_handles: ResMut<AtlasHandles>,
+    time: Res<Time>,
+) {
+    let mut rng = thread_rng();
+    match_timers.cook.tick(time.delta());
+    if match_timers.cook.finished() {
+        let mut objs = Vec::<(Entity, Taste)>::new();
+        for (ent, obj, _) in &obj_query {
+            objs.push((ent, obj.taste.clone()));
+        }
+        for (ent, mut obj, tr) in &mut obj_query {
+            if obj.zone == ObjectiveZone::Stomach {
+                if rng.gen_ratio(1, 25) {
+                    commands.entity(ent).despawn();
+                }
+            }
+            if obj.zone == ObjectiveZone::Pan {
+                if let Some(_) = objs
+                    .iter()
+                    .find(|(oth, taste)| *oth != ent && obj.taste == *taste)
+                    .take()
+                {
+                    if rng.gen_ratio(24, 25) {
+                        continue;
+                    }
+                    let (_, objtr) = obj_points
+                        .iter()
+                        .find(|(pt, _)| pt.zone == obj.zone)
+                        .take()
+                        .unwrap();
+
+                    obj.timer.reset();
+                    let from = tr.translation;
+                    let goto = objtr.translation
+                        + Vec3::new(
+                            rng.gen_range(-150..150) as f32,
+                            rng.gen_range(-60..80) as f32,
+                            rng.gen_range(0..10000) as f32 / 100000.0,
+                        );
+                    let atlas_handle = atlas_handles.handles.get(obj.taste.as_str()).unwrap();
+                    commands
+                        .spawn_bundle(SpriteSheetBundle {
+                            sprite: TextureAtlasSprite::new(0),
+                            texture_atlas: atlas_handle.clone(),
+                            transform: Transform {
+                                translation: objtr.translation
+                                    + Vec3::new(
+                                        rng.gen_range(-150..150) as f32,
+                                        rng.gen_range(-60..80) as f32,
+                                        rng.gen_range(0..10000) as f32 / 100000.0,
+                                    ),
+                                scale: Vec3::new(0.5, 0.5, 0.5),
+                                ..default()
+                            },
+                            ..default()
+                        })
+                        .insert(Objective {
+                            from,
+                            goto,
+                            taste: obj.taste.clone(),
+                            zone: obj.zone.clone(),
+                            timer: Timer::new(Duration::from_millis(500), false),
+                        });
+                }
+            }
+        }
+    }
+}
+
 fn eat_anim(
     mut eat_event_read: EventReader<EatEvent>,
     mut dude_query: Query<(&mut Dude, &mut TextureAtlasSprite)>,
@@ -379,65 +943,107 @@ fn eat_anim(
 ) {
     let (mut dude, mut id) = dude_query.single_mut();
     for event in eat_event_read.iter() {
+        dude.puking = false;
+        for i in 0..8 {
+            let taste = Taste::from_u32(i);
+            let val = *event.flavor.0.get(&taste).unwrap_or(&0.0);
+            let pref = *dude.palate.0.get(&taste).unwrap_or(&0.0);
+            if Preference::from_f32(pref) == Preference::Dislike && val > 0.0 {
+                dude.puking = true;
+            }
+        }
         dude.cycles += 4;
         dude.timer.reset();
     }
     dude.timer.tick(time.delta());
     if dude.timer.finished() {
         if dude.cycles > 0 {
-            id.index = if id.index == 0 { 1 } else { 0 };
+            id.index = if dude.puking {
+                if dude.cycles == 1 {
+                    0
+                } else {
+                    1
+                }
+            } else {
+                if id.index == 0 {
+                    2
+                } else {
+                    0
+                }
+            };
             dude.cycles -= 1;
             dude.timer.reset();
         }
     }
 }
 
-fn refresh_objectives(
+fn spawn_objectives(
     mut commands: Commands,
-    obj_query: Query<&Objective>,
-    food_query: Query<&Food>,
     obj_points: Query<(&ObjectivePoint, &Transform)>,
     atlas_handles: ResMut<AtlasHandles>,
+    mut eat_event: EventReader<EatEvent>,
 ) {
-    let mut sum = Flavor::default();
-    for food in food_query.iter() {
-        if food.state == FoodState::Eaten {
-            sum = sum + food.info.flavor.clone();
-        }
-    }
+    let mut rng = thread_rng();
+    for event in eat_event.iter() {
+        for i in 0..8 {
+            let taste = Taste::from_u32(i);
+            let value = *event.flavor.0.get(&taste).unwrap_or(&0.0);
 
-    for (points, tr) in &obj_points {
-        let value = *sum.0.get(&points.taste).unwrap_or(&0.0);
+            let (_, objtr) = obj_points
+                .iter()
+                .find(|(pt, _)| pt.zone == event.to_zone)
+                .take()
+                .unwrap();
 
-        let mut sum = 0;
-        for obj in &obj_query {
-            if obj.taste == points.taste {
-                sum += 1
-            }
-        }
+            for _ in 0..(value as u32) {
+                let from = event.from
+                    + Vec3::new(
+                        rng.gen_range(-100..100) as f32,
+                        rng.gen_range(-100..100) as f32,
+                        0.1,
+                    );
+                let goto = if event.to_zone == ObjectiveZone::Stomach {
+                    objtr.translation
+                        + Vec3::new(
+                            rng.gen_range(-20..20) as f32,
+                            rng.gen_range(-10..10) as f32,
+                            rng.gen_range(0..1000) as f32 / 10000.0,
+                        )
+                } else {
+                    objtr.translation
+                        + Vec3::new(
+                            rng.gen_range(-150..150) as f32,
+                            rng.gen_range(-60..80) as f32,
+                            rng.gen_range(0..10000) as f32 / 100000.0,
+                        )
+                };
 
-        for i in sum..(value as u32) {
-            let atlas_handle = atlas_handles.handles.get(points.taste.as_str()).unwrap();
-            commands
-                .spawn_bundle(SpriteSheetBundle {
-                    sprite: TextureAtlasSprite::new(0),
-                    texture_atlas: atlas_handle.clone(),
-                    transform: Transform {
-                        translation: tr.translation
-                            + Vec3::new(i as f32 * 10.0, 0.0, i as f32 * 0.01),
-                        scale: Vec3::new(0.5, 0.5, 0.5),
+                let atlas_handle = atlas_handles.handles.get(taste.as_str()).unwrap();
+                commands
+                    .spawn_bundle(SpriteSheetBundle {
+                        sprite: TextureAtlasSprite::new(0),
+                        texture_atlas: atlas_handle.clone(),
+                        transform: Transform {
+                            translation: event.from,
+                            scale: Vec3::new(0.5, 0.5, 0.5),
+                            ..default()
+                        },
                         ..default()
-                    },
-                    ..default()
-                })
-                .insert(Objective {
-                    taste: points.taste.clone(),
-                });
+                    })
+                    .insert(Objective {
+                        from,
+                        goto,
+                        taste: taste.clone(),
+                        zone: event.to_zone.clone(),
+                        timer: Timer::new(Duration::from_millis(500), false),
+                    });
+            }
         }
     }
 }
 
 fn use_hand(
+    mut commands: Commands,
     mut mouse_button_input_events: EventReader<MouseButtonInput>,
     mousepos: Res<MousePos>,
     mut hand: ResMut<Hand>,
@@ -447,56 +1053,71 @@ fn use_hand(
     mut refresh_event: EventWriter<RefreshShelfEvent>,
     mut eat_event: EventWriter<EatEvent>,
 ) {
-    for event in mouse_button_input_events.iter() {
-        if event.state.is_pressed() {
-            if let Some(held) = hand.holding {
-                let (_mouth, mouth_tr) = mouth_query.get_single().unwrap();
-                let (_pan, pan_tr) = pan_query.get_single().unwrap();
-                if mousepos
-                    .world
-                    .distance_squared(mouth_tr.translation.truncate())
-                    < 150.0 * 150.0
+    for _event in mouse_button_input_events.iter() {
+        if let Some(held) = hand.holding {
+            let (_mouth, mouth_tr) = mouth_query.get_single().unwrap();
+            let (_pan, pan_tr) = pan_query.get_single().unwrap();
+            if mousepos
+                .world
+                .distance_squared(mouth_tr.translation.truncate())
+                < 150.0 * 150.0
+            {
+                let (ent, mut food, tr) = food_query.get_mut(held).unwrap();
+                food.state = FoodState::Eaten;
+                refresh_event.send(RefreshShelfEvent { clear: true });
+                eat_event.send(EatEvent {
+                    from: tr.translation,
+                    flavor: food.info.flavor.clone(),
+                    to_zone: ObjectiveZone::Stomach,
+                });
+                hand.holding = None;
+                commands.entity(ent).despawn();
+            } else if mousepos
+                .world
+                .distance_squared(pan_tr.translation.truncate())
+                < 200.0 * 200.0
+            {
+                let (ent, mut food, tr) = food_query.get_mut(held).unwrap();
+                food.state = FoodState::Cooking;
+                refresh_event.send(RefreshShelfEvent { clear: false });
+                eat_event.send(EatEvent {
+                    from: tr.translation,
+                    flavor: food.info.flavor.clone(),
+                    to_zone: ObjectiveZone::Pan,
+                });
+                hand.holding = None;
+                commands.entity(ent).despawn();
+            }
+        } else {
+            for (ent, mut food, tr) in &mut food_query {
+                if food.state == FoodState::Shelved
+                    && mousepos.world.distance_squared(tr.translation.truncate()) < 100.0 * 100.0
                 {
-                    let (_, mut food, _) = food_query.get_mut(held).unwrap();
-                    food.state = FoodState::Eaten;
-                    dbg!("event in mouth!");
-                    hand.holding = None;
-                    refresh_event.send(RefreshShelfEvent { clear: true });
-                    eat_event.send(EatEvent {});
-                } else if mousepos
-                    .world
-                    .distance_squared(pan_tr.translation.truncate())
-                    < 200.0 * 200.0
-                {
-                    let (_, mut food, _) = food_query.get_mut(held).unwrap();
-                    food.state = FoodState::Cooking;
-                    dbg!("event in pan!");
-                    hand.holding = None;
-                    refresh_event.send(RefreshShelfEvent { clear: false });
-                    eat_event.send(EatEvent {});
-                }
-            } else {
-                for (ent, mut food, tr) in &mut food_query {
-                    if food.state == FoodState::Shelved
-                        && mousepos.world.distance_squared(tr.translation.truncate())
-                            < 100.0 * 100.0
-                    {
-                        food.state = FoodState::Held;
-                        hand.holding = Some(ent);
-                    }
+                    food.state = FoodState::Held;
+                    hand.holding = Some(ent);
                 }
             }
         }
     }
 }
 
-fn move_hand(mut commands: Commands, mousepos: Res<MousePos>, hand: Res<Hand>) {
+fn move_hand(
+    mut food_query: Query<(&Food, &mut Transform)>,
+    mousepos: Res<MousePos>,
+    hand: Res<Hand>,
+) {
     if let Some(held) = hand.holding {
-        commands.entity(held).insert(Transform {
-            translation: Vec3::new(mousepos.world.x, mousepos.world.y, 3.0),
-            ..default()
-        });
+        if let Some((_, mut tr)) = food_query.get_mut(held).ok() {
+            tr.translation = Vec3::new(mousepos.world.x, mousepos.world.y, 3.0);
+        }
     }
+}
+
+fn clear_hand(mut commands: Commands, mut hand: ResMut<Hand>) {
+    if let Some(held) = hand.holding {
+        commands.entity(held).despawn();
+    }
+    hand.holding = None;
 }
 
 #[derive(Default)]
@@ -504,6 +1125,35 @@ struct AssetHandles {
     images: HashMap<String, Handle<Image>>,
 }
 
+#[derive(PartialEq, Clone)]
+enum Preference {
+    Like,
+    Dislike,
+    Resist,
+    Normal,
+}
+
+impl Preference {
+    fn from_f32(n: f32) -> Self {
+        if n < 0.0 {
+            Preference::Dislike
+        } else if n > 1.0 {
+            Preference::Like
+        } else if n > 0.0 {
+            Preference::Normal
+        } else {
+            Preference::Resist
+        }
+    }
+}
+
+#[derive(Component)]
+struct PreferenceToken;
+
+#[derive(Component)]
+struct DudePreferencePoint {
+    preference: Preference,
+}
 #[derive(Component)]
 struct DudePoint;
 
@@ -540,8 +1190,7 @@ fn restock_shelf(
     mut commands: Commands,
     shelves: Query<(Entity, &Shelf, &Transform)>,
     mut restock_event: EventReader<RestockShelfEvent>,
-    asset_server: Res<AssetServer>,
-    mut atlas_handles: ResMut<AtlasHandles>,
+    atlas_handles: ResMut<AtlasHandles>,
     info: Res<Info>,
 ) {
     for event in restock_event.iter() {
