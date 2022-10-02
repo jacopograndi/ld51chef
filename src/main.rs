@@ -16,10 +16,12 @@ fn main() {
             height: 700.,
             ..default()
         })
-        .init_resource::<SpriteHandles>()
-        .add_state(AppState::Setup)
-        .add_system_set(SystemSet::on_enter(AppState::Setup).with_system(load_textures))
-        .add_system_set(SystemSet::on_update(AppState::Setup).with_system(check_textures))
+        .init_resource::<RawHandles>()
+        .insert_resource(ClearColor(Color::BLACK))
+        .add_state(AppState::Init)
+        .add_system_set(SystemSet::on_update(AppState::Init).with_system(init))
+        .add_system_set(SystemSet::on_enter(AppState::Setup).with_system(load_all))
+        .add_system_set(SystemSet::on_update(AppState::Setup).with_system(check_all))
         .add_system_set(SystemSet::on_exit(AppState::Setup).with_system(setup))
         .add_system_set(SystemSet::on_enter(AppState::Game).with_system(spawn_dude))
         .add_system_set(
@@ -51,10 +53,14 @@ fn main() {
                 .with_system(update_ui_timer)
                 .with_system(tally),
         )
-        .add_system_set(SystemSet::on_exit(AppState::Reward).with_system(pan_reset))
+        .add_system_set(
+            SystemSet::on_exit(AppState::Reward)
+                .with_system(pan_reset)
+                .with_system(reset_ui),
+        )
         .add_system_to_stage(CoreStage::PreUpdate, mouse_pos)
-        .init_resource::<AssetHandles>()
         .init_resource::<AtlasHandles>()
+        .init_resource::<AudioHandles>()
         .init_resource::<Hand>()
         .init_resource::<MousePos>()
         .init_resource::<Score>()
@@ -75,54 +81,23 @@ fn main() {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum AppState {
+    Init,
     Setup,
     Game,
     Reward,
 }
 
-#[derive(Default)]
-struct SpriteHandles {
-    handles: Vec<HandleUntyped>,
-}
-
-#[derive(Default)]
-struct AtlasHandles {
-    handles: HashMap<String, Handle<TextureAtlas>>,
-}
-
-fn load_textures(mut sprite_handles: ResMut<SpriteHandles>, asset_server: Res<AssetServer>) {
-    sprite_handles.handles = asset_server.load_folder("sprites").unwrap();
-}
-
-fn check_textures(
-    mut state: ResMut<State<AppState>>,
-    sprite_handles: ResMut<SpriteHandles>,
-    asset_server: Res<AssetServer>,
-) {
-    if let LoadState::Loaded =
-        asset_server.get_group_load_state(sprite_handles.handles.iter().map(|handle| handle.id))
-    {
-        state.set(AppState::Game).unwrap();
-    }
-}
-
-fn setup(
-    mut commands: Commands,
-    mut atlas_handles: ResMut<AtlasHandles>,
-    asset_server: Res<AssetServer>,
-    mut texture_atlases: ResMut<Assets<TextureAtlas>>,
-    mut textures: ResMut<Assets<Image>>,
-    mut refresh_event: EventWriter<RefreshShelfEvent>,
-) {
+fn init(mut commands: Commands, mut state: ResMut<State<AppState>>) {
     let info = Info {
+        atlases: vec![],
         food: vec![
             FoodInfo {
                 sprite: "leg".to_string(),
                 flavor: Flavor(HashMap::from([
-                    (Taste::Sweet, 0.5),
-                    (Taste::Salty, 0.5),
-                    (Taste::Savory, 1.0),
-                    (Taste::Spicy, 0.333),
+                    (Taste::Sweet, 1.0),
+                    (Taste::Salty, 1.0),
+                    (Taste::Savory, 2.0),
+                    (Taste::Spicy, 1.0),
                 ])),
             },
             FoodInfo {
@@ -133,35 +108,194 @@ fn setup(
                 sprite: "chocolate".to_string(),
                 flavor: Flavor(HashMap::from([(Taste::Bitter, 1.0)])),
             },
+            FoodInfo {
+                sprite: "ice-cream".to_string(),
+                flavor: Flavor(HashMap::from([(Taste::Dry, 1.0), (Taste::Cool, 2.0)])),
+            },
+            FoodInfo {
+                sprite: "fish".to_string(),
+                flavor: Flavor(HashMap::from([(Taste::Savory, 1.0), (Taste::Salty, 1.0)])),
+            },
+            FoodInfo {
+                sprite: "coffee".to_string(),
+                flavor: Flavor(HashMap::from([(Taste::Dry, 1.0), (Taste::Bitter, 2.0)])),
+            },
+            FoodInfo {
+                sprite: "lemon".to_string(),
+                flavor: Flavor(HashMap::from([(Taste::Sour, 3.0)])),
+            },
+            FoodInfo {
+                sprite: "cheese".to_string(),
+                flavor: Flavor(HashMap::from([(Taste::Sweet, 1.0), (Taste::Savory, 1.0)])),
+            },
+            FoodInfo {
+                sprite: "cinnamon".to_string(),
+                flavor: Flavor(HashMap::from([(Taste::Dry, 1.0), (Taste::Spicy, 1.0)])),
+            },
+            FoodInfo {
+                sprite: "mint".to_string(),
+                flavor: Flavor(HashMap::from([(Taste::Cool, 2.0)])),
+            },
+            FoodInfo {
+                sprite: "apple".to_string(),
+                flavor: Flavor(HashMap::from([(Taste::Sweet, 1.0)])),
+            },
+            FoodInfo {
+                sprite: "blueberry".to_string(),
+                flavor: Flavor(HashMap::from([(Taste::Sweet, 2.0), (Taste::Sour, 1.0)])),
+            },
+            FoodInfo {
+                sprite: "feather".to_string(),
+                flavor: Flavor(HashMap::from([(Taste::Dry, 2.0)])),
+            },
+            FoodInfo {
+                sprite: "gas".to_string(),
+                flavor: Flavor(HashMap::from([(Taste::Spicy, 2.0), (Taste::Bitter, 2.0)])),
+            },
+            FoodInfo {
+                sprite: "dynamite".to_string(),
+                flavor: Flavor(HashMap::from([(Taste::Spicy, 2.0), (Taste::Savory, 1.0)])),
+            },
+            FoodInfo {
+                sprite: "chips".to_string(),
+                flavor: Flavor(HashMap::from([
+                    (Taste::Sweet, 1.0),
+                    (Taste::Salty, 3.0),
+                    (Taste::Dry, 1.0),
+                ])),
+            },
+            FoodInfo {
+                sprite: "onion".to_string(),
+                flavor: Flavor(HashMap::from([
+                    (Taste::Sweet, 1.0),
+                    (Taste::Sour, 2.0),
+                    (Taste::Spicy, 1.0),
+                ])),
+            },
         ],
-        dude: vec![DudeInfo {
-            sprite: "dude".to_string(),
-        }],
+        dude: vec![
+            DudeInfo {
+                sprite: "dude".to_string(),
+            },
+            DudeInfo {
+                sprite: "ale".to_string(),
+            },
+            DudeInfo {
+                sprite: "elena".to_string(),
+            },
+        ],
     };
-    commands.insert_resource(info.clone());
+    commands.insert_resource(info);
+    state.set(AppState::Setup).unwrap();
+}
 
+#[derive(Default)]
+struct RawHandles {
+    sprites: Vec<Handle<Image>>,
+    audio: Vec<Handle<AudioSource>>,
+}
+
+#[derive(Default)]
+struct AudioHandles {
+    handles: HashMap<String, Handle<AudioSource>>,
+}
+
+#[derive(Default)]
+struct AtlasHandles {
+    handles: HashMap<String, Handle<TextureAtlas>>,
+}
+
+fn load_all(
+    mut raw_handles: ResMut<RawHandles>,
+    asset_server: Res<AssetServer>,
+    mut audio_handles: ResMut<AudioHandles>,
+    mut info: ResMut<Info>,
+) {
+    let mut atlases = vec![
+        vec!["dude", "dude-gnam", "dude-puke"],
+        vec!["elena", "elena-gnam", "elena-puke"],
+        vec!["ale", "ale-gnam", "ale-puke"],
+        vec!["pan", "pan-anim1", "pan-anim2"],
+        vec!["Time"],
+        vec!["guuut"],
+        vec!["bad"],
+        vec!["resist"],
+        vec!["stomach"],
+        vec!["goal"],
+        vec!["pan-icon"],
+        vec!["background"],
+    ];
+    let food = info.food.clone();
+    for food_info in food.iter() {
+        atlases.push(vec![&food_info.sprite]);
+    }
+    for i in 0..8 {
+        atlases.push(vec![&Taste::as_str(&Taste::from_u32(i))]);
+    }
+    for atlas in atlases {
+        let mut v = vec![];
+        for name in atlas {
+            let path = "sprites/".to_string() + name + ".png";
+            raw_handles.sprites.push(asset_server.load(&path));
+            v.push(name.to_string());
+        }
+        info.atlases.push(v);
+    }
+    let audio_names = vec![
+        "lol",
+        "elena-gnam",
+        "elena-puke",
+        "elena-yeah",
+        "dude-gnam",
+        "dude-puke",
+        "dude-yeah",
+        "ale-gnam",
+        "ale-puke",
+        "ale-yeah",
+    ];
+    for name in audio_names {
+        let handle = asset_server.load(&("audio/".to_string() + name + ".ogg"));
+        raw_handles.audio.push(handle.clone());
+        audio_handles.handles.insert(name.to_string(), handle);
+    }
+}
+
+fn check_all(
+    mut state: ResMut<State<AppState>>,
+    handles: ResMut<RawHandles>,
+    asset_server: Res<AssetServer>,
+) {
+    if let LoadState::Loaded =
+        asset_server.get_group_load_state(handles.sprites.iter().map(|handle| handle.id))
+    {
+        if let LoadState::Loaded =
+            asset_server.get_group_load_state(handles.audio.iter().map(|handle| handle.id))
+        {
+            state.set(AppState::Game).unwrap();
+        }
+    }
+}
+
+fn setup(
+    mut commands: Commands,
+    mut atlas_handles: ResMut<AtlasHandles>,
+    asset_server: Res<AssetServer>,
+    mut texture_atlases: ResMut<Assets<TextureAtlas>>,
+    mut textures: ResMut<Assets<Image>>,
+    mut refresh_event: EventWriter<RefreshShelfEvent>,
+    info: Res<Info>,
+    audio_handles: Res<AudioHandles>,
+    audio: Res<Audio>,
+) {
     let res = Vec2::new(1200.0, 700.0);
     let halfres = res / 2.0;
 
     let camera_bundle = Camera2dBundle::new_with_far(100.0);
     commands.spawn_bundle(camera_bundle);
 
-    let mut atlases = vec![
-        vec!["dude", "dude-gnam", "dude-puke"],
-        vec!["pan", "pan-anim1", "pan-anim2"],
-        vec!["Time"],
-        vec!["guuut"],
-        vec!["bad"],
-        vec!["resist"],
-    ];
-    for food_info in info.food.iter() {
-        atlases.push(vec![&food_info.sprite]);
-    }
-    for i in 0..8 {
-        atlases.push(vec![&Taste::as_str(&Taste::from_u32(i))]);
-    }
-    for atlas in atlases.iter() {
+    for atlas in info.atlases.iter() {
         let mut texture_atlas_builder = TextureAtlasBuilder::default();
+
         for name in atlas {
             let handle = asset_server.get_handle("sprites/".to_string() + name + ".png");
             let texture = textures
@@ -175,6 +309,15 @@ fn setup(
             .handles
             .insert(atlas[0].to_string(), atlas_handle);
     }
+    commands.spawn_bundle(SpriteSheetBundle {
+        sprite: TextureAtlasSprite::new(0),
+        texture_atlas: atlas_handles.handles.get("background").unwrap().clone(),
+        transform: Transform {
+            translation: Vec3::new(0.0, 0.0, 0.0),
+            ..default()
+        },
+        ..default()
+    });
 
     commands
         .spawn_bundle(SpriteSheetBundle {
@@ -222,7 +365,7 @@ fn setup(
     commands
         .spawn()
         .insert(Transform {
-            translation: Vec3::new(0.0, halfres.y - 256.0, 1.0),
+            translation: Vec3::new(0.0, halfres.y - 256.0, 0.1),
             ..default()
         })
         .insert(DudePoint);
@@ -288,111 +431,128 @@ fn setup(
         });
 
     let font = asset_server.load("fonts/SztyletBd.ttf");
+    let style = TextStyle {
+        font: font.clone(),
+        font_size: 72.0,
+        color: Color::BLACK,
+    };
+    commands.spawn_bundle(SpriteSheetBundle {
+        sprite: TextureAtlasSprite::new(0),
+        texture_atlas: atlas_handles.handles.get("goal").unwrap().clone(),
+        transform: Transform {
+            translation: Vec3::new(halfres.x - 64.0, halfres.y - 128.0, 1.0),
+            scale: Vec3::splat(0.5),
+            ..default()
+        },
+        ..default()
+    });
     commands
-        .spawn_bundle(NodeBundle {
-            style: Style {
-                align_self: AlignSelf::FlexEnd,
-                position_type: PositionType::Absolute,
-                position: UiRect {
-                    right: Val::Px(192.0),
-                    top: Val::Px(192.0),
-                    ..default()
-                },
-                margin: UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(10.0), Val::Px(10.0)),
-                min_size: Size::new(Val::Px(100.0), Val::Px(70.0)),
+        .spawn_bundle(Text2dBundle {
+            text: Text::from_section("0", style.clone()).with_alignment(TextAlignment::CENTER),
+            transform: Transform {
+                translation: Vec3::new(halfres.x - 64.0, halfres.y - 128.0, 7.0),
                 ..default()
             },
-            color: Color::rgb(0.0, 0.0, 0.0).into(),
             ..default()
         })
-        .with_children(|parent| {
-            parent
-                .spawn_bundle(
-                    TextBundle::from_section(
-                        "0",
-                        TextStyle {
-                            font: font.clone(),
-                            font_size: 72.0,
-                            color: Color::WHITE,
-                        },
-                    )
-                    .with_text_alignment(TextAlignment::TOP_CENTER)
-                    .with_style(Style { ..default() }),
-                )
-                .insert(UiTag {
-                    name: UiName::Palate,
-                });
-        });
-    commands
-        .spawn_bundle(NodeBundle {
-            style: Style {
-                align_self: AlignSelf::FlexEnd,
-                position_type: PositionType::Absolute,
-                position: UiRect {
-                    right: Val::Px(192.0),
-                    top: Val::Px(halfres.y),
-                    ..default()
-                },
-                margin: UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(10.0), Val::Px(10.0)),
-                min_size: Size::new(Val::Px(100.0), Val::Px(70.0)),
-                ..default()
-            },
-            color: Color::rgb(0.0, 0.0, 0.0).into(),
-            ..default()
-        })
-        .with_children(|parent| {
-            parent
-                .spawn_bundle(
-                    TextBundle::from_section(
-                        "0",
-                        TextStyle {
-                            font: font.clone(),
-                            font_size: 72.0,
-                            color: Color::WHITE,
-                        },
-                    )
-                    .with_text_alignment(TextAlignment::TOP_CENTER)
-                    .with_style(Style { ..default() }),
-                )
-                .insert(UiTag {
-                    name: UiName::Stomach,
-                });
-        });
-    commands
-        .spawn_bundle(NodeBundle {
-            style: Style {
-                align_self: AlignSelf::FlexEnd,
-                position_type: PositionType::Absolute,
-                position: UiRect {
-                    right: Val::Px(192.0),
-                    bottom: Val::Px(128.0),
-                    ..default()
-                },
-                margin: UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(10.0), Val::Px(10.0)),
-                min_size: Size::new(Val::Px(100.0), Val::Px(70.0)),
-                ..default()
-            },
-            color: Color::rgb(0.0, 0.0, 0.0).into(),
-            ..default()
-        })
-        .with_children(|parent| {
-            parent
-                .spawn_bundle(
-                    TextBundle::from_section(
-                        "0",
-                        TextStyle {
-                            font: font.clone(),
-                            font_size: 72.0,
-                            color: Color::WHITE,
-                        },
-                    )
-                    .with_text_alignment(TextAlignment::TOP_CENTER)
-                    .with_style(Style { ..default() }),
-                )
-                .insert(UiTag { name: UiName::Pan });
+        .insert(UiTag {
+            name: UiName::Palate,
         });
 
+    commands.spawn_bundle(SpriteSheetBundle {
+        sprite: TextureAtlasSprite::new(0),
+        texture_atlas: atlas_handles.handles.get("stomach").unwrap().clone(),
+        transform: Transform {
+            translation: Vec3::new(-20.0 + halfres.x - 64.0, 0.0, 0.1),
+            scale: Vec3::splat(0.5),
+            ..default()
+        },
+        ..default()
+    });
+    commands
+        .spawn_bundle(Text2dBundle {
+            text: Text::from_section("0", style.clone()).with_alignment(TextAlignment::CENTER),
+            transform: Transform {
+                translation: Vec3::new(halfres.x - 64.0, 0.0, 7.0),
+                ..default()
+            },
+            ..default()
+        })
+        .insert(UiTag {
+            name: UiName::Stomach,
+        });
+
+    commands.spawn_bundle(SpriteSheetBundle {
+        sprite: TextureAtlasSprite::new(0),
+        texture_atlas: atlas_handles.handles.get("pan-icon").unwrap().clone(),
+        transform: Transform {
+            translation: Vec3::new(halfres.x - 64.0, -halfres.y + 128.0, 1.0),
+            scale: Vec3::splat(0.5),
+            ..default()
+        },
+        ..default()
+    });
+    commands
+        .spawn_bundle(Text2dBundle {
+            text: Text::from_section("0", style.clone()).with_alignment(TextAlignment::CENTER),
+            transform: Transform {
+                translation: Vec3::new(halfres.x - 64.0, -halfres.y + 128.0, 7.0),
+                ..default()
+            },
+            ..default()
+        })
+        .insert(UiTag { name: UiName::Pan });
+
+    commands
+        .spawn_bundle(Text2dBundle {
+            text: Text::from_section(
+                "OH YEAH!",
+                TextStyle {
+                    font: font.clone(),
+                    font_size: 144.0,
+                    color: Color::DARK_GREEN,
+                },
+            )
+            .with_alignment(TextAlignment::CENTER),
+            transform: Transform {
+                translation: Vec3::new(0.0, 0.0, 10.0),
+                ..default()
+            },
+            visibility: Visibility { is_visible: false },
+            ..default()
+        })
+        .insert(UiTag { name: UiName::Win });
+
+    commands
+        .spawn_bundle(Text2dBundle {
+            text: Text::from_section(
+                "DISGUSTING",
+                TextStyle {
+                    font: font.clone(),
+                    font_size: 144.0,
+                    color: Color::RED,
+                },
+            )
+            .with_alignment(TextAlignment::CENTER),
+            transform: Transform {
+                translation: Vec3::new(0.0, 0.0, 10.0),
+                ..default()
+            },
+            visibility: Visibility { is_visible: false },
+            ..default()
+        })
+        .insert(UiTag { name: UiName::Lose });
+
     refresh_event.send(RefreshShelfEvent { clear: true });
+
+    audio.play_with_settings(
+        audio_handles.handles.get("lol").unwrap().clone(),
+        PlaybackSettings {
+            repeat: true,
+            volume: 0.1,
+            ..default()
+        },
+    );
 }
 
 fn spawn_dude(
@@ -415,7 +575,8 @@ fn spawn_dude(
 
     let palate = Flavor::gen();
 
-    let atlas_handle = atlas_handles.handles.get("dude").unwrap();
+    let info = &info.dude[rng.gen_range(0..info.dude.len())];
+    let atlas_handle = atlas_handles.handles.get(&info.sprite).unwrap();
     commands
         .spawn_bundle(SpriteSheetBundle {
             sprite: TextureAtlasSprite::new(0),
@@ -430,8 +591,17 @@ fn spawn_dude(
         .insert(Dude {
             puking: false,
             cycles: 0,
-            timer: Timer::new(Duration::from_millis(rng.gen_range(20..100)), false),
+            timer: Timer::new(Duration::from_millis(rng.gen_range(80..150)), false),
             palate: palate.clone(),
+            info: info.clone(),
+            yeah: false,
+        });
+
+    commands
+        .spawn()
+        .insert(Transform {
+            translation: Vec3::new(0.0, 0.0, 0.0),
+            ..default()
         })
         .insert(ObjectivePoint {
             zone: ObjectiveZone::Stomach,
@@ -591,6 +761,7 @@ struct DudeInfo {
 
 #[derive(Clone)]
 struct Info {
+    atlases: Vec<Vec<String>>,
     food: Vec<FoodInfo>,
     dude: Vec<DudeInfo>,
 }
@@ -612,6 +783,8 @@ struct Dude {
     cycles: u32,
     palate: Flavor,
     puking: bool,
+    info: DudeInfo,
+    yeah: bool,
 }
 
 #[derive(Component)]
@@ -695,10 +868,13 @@ struct Difficulty {
     threshold: i32,
 }
 
+#[derive(PartialEq)]
 enum UiName {
     Stomach,
     Palate,
     Pan,
+    Win,
+    Lose,
 }
 
 #[derive(Component)]
@@ -729,16 +905,26 @@ fn match_timers(
     }
 }
 
+fn reset_ui(mut ui_query: Query<(&UiTag, &mut Visibility)>) {
+    for (tag, mut vis) in &mut ui_query {
+        if tag.name == UiName::Win || tag.name == UiName::Lose {
+            vis.is_visible = false;
+        }
+    }
+}
+
 fn tally(
     mut commands: Commands,
     obj_query: Query<(Entity, &Objective)>,
-    dude_query: Query<&Dude>,
+    mut dude_query: Query<&mut Dude>,
     mut score: ResMut<Score>,
     mut difficulty: ResMut<Difficulty>,
     mut smash_event: EventReader<PanSmashEvent>,
+    mut ui_query: Query<(&UiTag, &mut Visibility)>,
+    mut refresh: EventWriter<RefreshShelfEvent>,
 ) {
     for _ in smash_event.iter() {
-        let dude = dude_query.single();
+        let mut dude = dude_query.single_mut();
 
         let mut sum: f32 = 0.0;
         for (ent, obj) in &obj_query {
@@ -746,14 +932,31 @@ fn tally(
             let value = 1.0 * modifier;
             sum += value;
             commands.entity(ent).despawn();
+            dude.cycles = 0;
         }
+
+        refresh.send(RefreshShelfEvent { clear: false });
 
         if sum as i32 >= difficulty.threshold {
             score.successes += 1;
             difficulty.threshold += 10;
+            if let Some((_, mut vis)) = ui_query
+                .iter_mut()
+                .find(|(tag, _)| tag.name == UiName::Win)
+                .take()
+            {
+                vis.is_visible = true;
+            }
         } else {
             score.losses += 1;
             difficulty.threshold -= 3;
+            if let Some((_, mut vis)) = ui_query
+                .iter_mut()
+                .find(|(tag, _)| tag.name == UiName::Lose)
+                .take()
+            {
+                vis.is_visible = true;
+            }
         }
     }
 }
@@ -777,7 +980,7 @@ fn update_ui(
             UiName::Palate => text.sections[0].value = difficulty.threshold.to_string(),
             UiName::Stomach => text.sections[0].value = stomach_sum.to_string(),
             UiName::Pan => text.sections[0].value = pan_sum.to_string(),
-            _ => unreachable!(),
+            _ => (),
         }
     }
 }
@@ -819,7 +1022,11 @@ fn pan_anim(
     mut pan_query: Query<(&mut Pan, &mut Transform, &mut TextureAtlasSprite)>,
     mut event_smash: EventWriter<PanSmashEvent>,
     time: Res<Time>,
+    audio_handles: Res<AudioHandles>,
+    audio: Res<Audio>,
+    mut dude_query: Query<(Entity, &mut Dude)>,
 ) {
+    let (_, mut dude) = dude_query.single_mut();
     let (mut pan, mut tr, mut sprite) = pan_query.single_mut();
     if pan.smashed {
         return;
@@ -833,14 +1040,19 @@ fn pan_anim(
         pan.smashed = true;
     } else {
         let t = pan.timer.percent();
+        if t > 0.5 && !dude.yeah {
+            let audio_name = dude.info.sprite.clone() + "-yeah";
+            audio.play(audio_handles.handles.get(&audio_name).unwrap().clone());
+            dude.yeah = true;
+        }
         let e = f32::min(1.0, t.powi(5) * 32.0);
         tr.translation = pan.from * (1.0 - e) + pan.goto * e;
         if t < 0.25 {
             sprite.index = 0
         } else if t < 0.5 {
-            sprite.index = 2
-        } else {
             sprite.index = 1
+        } else {
+            sprite.index = 2
         }
         for mut obj in &mut obj_query {
             if obj.zone == ObjectiveZone::Pan {
@@ -940,6 +1152,8 @@ fn eat_anim(
     mut eat_event_read: EventReader<EatEvent>,
     mut dude_query: Query<(&mut Dude, &mut TextureAtlasSprite)>,
     time: Res<Time>,
+    audio_handles: Res<AudioHandles>,
+    audio: Res<Audio>,
 ) {
     let (mut dude, mut id) = dude_query.single_mut();
     for event in eat_event_read.iter() {
@@ -950,6 +1164,8 @@ fn eat_anim(
             let pref = *dude.palate.0.get(&taste).unwrap_or(&0.0);
             if Preference::from_f32(pref) == Preference::Dislike && val > 0.0 {
                 dude.puking = true;
+                let audio_name = dude.info.sprite.clone() + "-puke";
+                audio.play(audio_handles.handles.get(&audio_name).unwrap().clone());
             }
         }
         dude.cycles += 4;
@@ -962,11 +1178,13 @@ fn eat_anim(
                 if dude.cycles == 1 {
                     0
                 } else {
-                    1
+                    2
                 }
             } else {
                 if id.index == 0 {
-                    2
+                    let audio_name = dude.info.sprite.clone() + "-gnam";
+                    audio.play(audio_handles.handles.get(&audio_name).unwrap().clone());
+                    1
                 } else {
                     0
                 }
@@ -1118,11 +1336,6 @@ fn clear_hand(mut commands: Commands, mut hand: ResMut<Hand>) {
         commands.entity(held).despawn();
     }
     hand.holding = None;
-}
-
-#[derive(Default)]
-struct AssetHandles {
-    images: HashMap<String, Handle<Image>>,
 }
 
 #[derive(PartialEq, Clone)]
